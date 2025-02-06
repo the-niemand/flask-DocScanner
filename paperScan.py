@@ -42,13 +42,17 @@ def process_image(image):
         cv2.circle(img_resize, tuple_point, 3, (0, 0, 255), 4)
         p.append(tuple_point)
 
+    # Apply Perspective Transform
     warped_image = perspective_transform(copy, doc.reshape(4, 2) * ratio)
-    warped_image = cv2.cvtColor(warped_image, cv2.COLOR_BGR2GRAY)
+    
+    # ---------------- Sharpening ----------------
+    sharpening_kernel = np.array([[0, -1, 0],
+                                  [-1, 5, -1],
+                                  [0, -1, 0]])
+    sharpened_image = cv2.filter2D(warped_image, -1, sharpening_kernel)  # Apply sharpening filter
 
-    T = threshold_local(warped_image, 11, offset=10, method="gaussian")
-    warped = (warped_image > T).astype("uint8") * 255
+    return sharpened_image  # Return the processed image
 
-    return warped
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -70,10 +74,10 @@ def upload():
 
     pil_image = Image.fromarray(scanned_image)
     img_io = io.BytesIO()
-    pil_image.save(img_io, format="PNG")
+    pil_image.save(img_io, format="JPEG")
     img_io.seek(0)
 
-    return send_file(img_io, mimetype="image/png")
+    return send_file(img_io, mimetype="image/jpeg")
 
 if __name__ == "__main__":
     app.run(debug=True)
