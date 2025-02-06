@@ -1,4 +1,5 @@
 import cv2
+import imutils
 import numpy as np
 import io
 from flask import Flask, request, jsonify, send_file
@@ -6,42 +7,48 @@ from PIL import Image
 from flask_cors import CORS
 from skimage.filters import threshold_local
 from utils import four_point_perspective_transform
+from transform import perspective_transform
 
 app = Flask(__name__)
 CORS(app)
 
 def process_image(image):
-    """Process the image to scan the document."""
-    image_copy = image.copy()
-    image = cv2.resize(image, (1500, 800))
-    image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    image_blurred = cv2.GaussianBlur(image_gray, (5, 5), 0)
-    image_edge = cv2.Canny(image_gray, 75, 200)
+    copy = image.copy()
+    ratio = image.shape[0] / 500.0
+    img_resize = imutils.resize(image, height=500)
 
-    # Find contours
-    cnts, _ = cv2.findContours(image_edge.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    gray_image = cv2.cvtColor(img_resize, cv2.COLOR_BGR2GRAY)
+    blurred_image = cv2.GaussianBlur(gray_image, (5, 5), 0)
+    edged_img = cv2.Canny(blurred_image, 75, 200)
+
+    cnts, _ = cv2.findContours(edged_img, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
 
-    screenCnt = None
+    doc = None  # Ensure doc is defined
+
     for c in cnts:
         peri = cv2.arcLength(c, True)
         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
         if len(approx) == 4:
-            screenCnt = approx
+            doc = approx
             break
 
-    if screenCnt is None:
-        return None
+    if doc is None:
+        return None  # Return None if no document contour was found
 
-    # Get the perspective transformation
-    warped_image = four_point_perspective_transform(image, screenCnt.reshape(4, 2))
+    p = []
+    for d in doc:
+        tuple_point = tuple(d[0])
+        cv2.circle(img_resize, tuple_point, 3, (0, 0, 255), 4)
+        p.append(tuple_point)
 
-    # Convert to grayscale and apply threshold for scanned effect
+    warped_image = perspective_transform(copy, doc.reshape(4, 2) * ratio)
     warped_image = cv2.cvtColor(warped_image, cv2.COLOR_BGR2GRAY)
-    T = threshold_local(warped_image, 11, offset=10, method="gaussian")
-    warped_image = (warped_image > T).astype("uint8") * 255
 
-    return warped_image
+    T = threshold_local(warped_image, 11, offset=10, method="gaussian")
+    warped = (warped_image > T).astype("uint8") * 255
+
+    return warped
 
 @app.route("/upload", methods=["POST"])
 def upload():
@@ -50,19 +57,18 @@ def upload():
 
     file = request.files["file"]
     
-    # Read the image using PIL
-    image = Image.open(file)
-    image = np.array(image)
+    try:
+        image = Image.open(file).convert("RGB")  # Convert to RGB to avoid mode issues
+        image = np.array(image)
+    except Exception as e:
+        return jsonify({"error": "Invalid image file"}), 400
 
-    # Process the image
     scanned_image = process_image(image)
+
     if scanned_image is None:
         return jsonify({"error": "Could not detect a document"}), 400
 
-    # Convert back to PIL image
     pil_image = Image.fromarray(scanned_image)
-
-    # Save to buffer
     img_io = io.BytesIO()
     pil_image.save(img_io, format="PNG")
     img_io.seek(0)
@@ -74,8 +80,75 @@ if __name__ == "__main__":
 
 
 
+# def process_image(image):
+#     """Process the image to scan the document."""
+#     image_copy = image.copy()
+#     image = cv2.resize(image, (1500, 800))
+#     image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+#     image_blurred = cv2.GaussianBlur(image_gray, (5, 5), 0)
+#     image_edge = cv2.Canny(image_gray, 75, 200)
+
+#     # Find contours
+#     cnts, _ = cv2.findContours(image_edge.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+#     cnts = sorted(cnts, key=cv2.contourArea, reverse=True)[:5]
+
+#     screenCnt = None
+#     for c in cnts:
+#         peri = cv2.arcLength(c, True)
+#         approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+#         if len(approx) == 4:
+#             screenCnt = approx
+#             break
+
+#     if screenCnt is None:
+#         return None
+
+#     # Get the perspective transformation
+#     warped_image = four_point_perspective_transform(image, screenCnt.reshape(4, 2))
+
+#     # Convert to grayscale and apply threshold for scanned effect
+#     warped_image = cv2.cvtColor(warped_image, cv2.COLOR_BGR2GRAY)
+#     T = threshold_local(warped_image, 11, offset=10, method="gaussian")
+#     warped_image = (warped_image > T).astype("uint8") * 255
+
+#     return warped_image
+
+# @app.route("/upload", methods=["POST"])
+# def upload():
+#     if "file" not in request.files:
+#         return jsonify({"error": "No file uploaded"}), 400
+
+#     file = request.files["file"]
+    
+#     # Read the image using PIL
+#     image = Image.open(file)
+#     image = np.array(image)
+
+#     # Process the image
+#     scanned_image = process_image(image)
+
+#     # -------------------------------------
+#     if scanned_image is None:
+#         return jsonify({"error": "Could not detect a document"}), 400
+
+#     # Convert back to PIL image
+#     pil_image = Image.fromarray(scanned_image)
+
+#     # Save to buffer
+#     img_io = io.BytesIO()
+#     pil_image.save(img_io, format="PNG")
+#     img_io.seek(0)
+
+#     return send_file(img_io, mimetype="image/png")
+# # -----------------------------------
+
+# if __name__ == "__main__":
+#     app.run(debug=True)
 
 
+
+
+# -------------------------------------------------
 # import cv2
 # import numpy as np
 # import io
